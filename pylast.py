@@ -28,7 +28,7 @@ import hashlib
 from xml.dom import minidom
 import xml.dom
 import time
-import shelve
+import pytc, json
 import tempfile
 import sys
 import collections
@@ -352,7 +352,8 @@ class _Network(object):
         
     def enable_caching(self, file_path = None):
         """Enables caching request-wide for all cachable calls.
-        
+        Uses pytc (python tokyo cabinet implementation) as cache backend
+
         * file_path: A file path for the backend storage file. If 
         None set, a temp file would probably be created, according the backend.
         """
@@ -688,16 +689,18 @@ def get_librefm_network(api_key="", api_secret="", session_key = "", username = 
 class _ShelfCacheBackend(object):
     """Used as a backend for caching cacheable requests."""
     def __init__(self, file_path = None):
-        self.shelf = shelve.open(file_path)
+        self.hdb = pytc.HDB()
+        self.hdb.open(file_path, pytc.HDBOWRITER | pytc.HDBOCREAT)
     
     def get_xml(self, key):
-        return self.shelf[key]
+        return json.loads(self.hdb.get(key) )
     
     def set_xml(self, key, xml_string):
-        self.shelf[key] = xml_string
+        self.hdb.put(key, json.dumps(xml_string) )
+        self.hdb.sync()
     
     def has_key(self, key):
-        return key in self.shelf.keys()
+        return self.hdb.has_key(key)
     
 class _Request(object):
     """Representing an abstract web service operation."""
