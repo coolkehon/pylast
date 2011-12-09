@@ -23,10 +23,10 @@ def get_build():
 
 setup(name = "pylast",
       version = "0.5." + get_build(),
-      author = "Amr Hassan <amr.hassan@gmail.com>",
-	  description = "A Python interface to Last.fm (and other API compatible social networks)",
-      author_email = "amr.hassan@gmail.com",
-      url = "http://code.google.com/p/pylast/",
-      py_modules = ("pylast",),
+      author = "Amr Hassan <amr.hassan@gmail.com>, coolkehon <coolkehon[at]gmail>",
+	  description = "A Python interface to Last.fm (and other API compatible social networks) using kyotocabinet cache backend",
+      author_email = "amr.hassan@gmail.com, coolkehon@gmail.com",
+      url = "https://github.com/coolkehon/pylast",
+      py_modules = ("pylast", "kyotocabinet"),
 	  license = "Apache2"
 	)
