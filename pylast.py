@@ -28,28 +28,18 @@ import hashlib
 from xml.dom import minidom
 import xml.dom
 import time
-import pytc, json
+import kyotocabinet, json
 import tempfile
 import sys
 import collections
 import warnings
+from http.client import HTTPConnection
+import html.entities as htmlentitydefs
+from urllib.parse import splithost as url_split_host
+from urllib.parse import quote_plus as url_quote_plus
 
 def _deprecation_warning(message):
     warnings.warn(message, DeprecationWarning)
-
-if sys.version_info[0] == 3:
-    from http.client import HTTPConnection
-    import html.entities as htmlentitydefs
-    from urllib.parse import splithost as url_split_host
-    from urllib.parse import quote_plus as url_quote_plus
-    
-    unichr = chr
-
-elif sys.version_info[0] == 2:
-    from httplib import HTTPConnection
-    import htmlentitydefs 
-    from urllib import splithost as url_split_host
-    from urllib import quote_plus as url_quote_plus
 
 STATUS_INVALID_SERVICE = 2
 STATUS_INVALID_METHOD = 3
@@ -689,18 +679,30 @@ def get_librefm_network(api_key="", api_secret="", session_key = "", username = 
 class _ShelfCacheBackend(object):
     """Used as a backend for caching cacheable requests."""
     def __init__(self, file_path = None):
-        self.hdb = pytc.HDB()
-        self.hdb.open(file_path, pytc.HDBOWRITER | pytc.HDBOCREAT)
+        self.db = kyotocabinet.DB()
+        if not self.db.open(file_path, kyotocabinet.DB.OWRITER | kyotocabinet.DB.OCREATE):
+            print("open error: " + str(self.db.error()), file=sys.stderr)
     
     def get_xml(self, key):
-        return json.loads(self.hdb.get(key) )
+        value = self.db.get(key)
+        if value:
+            return json.loads(value )
+        else:
+            print("get error: " + str(self.db.error()), file=sys.stderr)
+        return None
     
     def set_xml(self, key, xml_string):
-        self.hdb.put(key, json.dumps(xml_string) )
-        self.hdb.sync()
+        if not self.db.set(key, json.dumps(xml_string) ):
+            print("set error: " + str(self.db.error()), file=sys.stderr)
+        self.db.synchronize()
     
     def has_key(self, key):
-        return self.hdb.has_key(key)
+        if self.get_xml(key):
+            return True
+        return False
+
+    def __contains__(self, key):
+        return self.has_key(key)
     
 class _Request(object):
     """Representing an abstract web service operation."""
@@ -728,13 +730,13 @@ class _Request(object):
     def sign_it(self):
         """Sign this request."""
         
-        if not "api_sig" in self.params.keys():
+        if not "api_sig" in self.params:
             self.params['api_sig'] = self._get_signature()
     
     def _get_signature(self):
         """Returns a 32-character hexadecimal md5 hash of the signature string."""
         
-        keys = list(self.params.keys())
+        keys = self.params
         
         keys.sort()
         
@@ -751,12 +753,9 @@ class _Request(object):
     def _get_cache_key(self):
         """The cache key is a string of concatenated sorted names and values."""
         
-        keys = list(self.params.keys())
-        keys.sort()
-        
         cache_key = str()
         
-        for key in keys:
+        for key in self.params:
             if key != "api_sig" and key != "api_key" and key != "sk":
                 cache_key += key + _string(self.params[key])
         
@@ -774,7 +773,7 @@ class _Request(object):
     def _is_cached(self):
         """Returns True if the request is already in cache."""
         
-        return self.cache.has_key(self._get_cache_key())
+        return self._get_cache_key() in self.cache
         
     def _download_response(self):
         """Returns a response body string from the server."""
@@ -783,7 +782,7 @@ class _Request(object):
         #self.network._delay_call()    # enable it if you want.
         
         data = []
-        for name in self.params.keys():
+        for name in self.params:
             data.append('='.join((name, url_quote_plus(_string(self.params[name])))))
         data = '&'.join(data)
         
@@ -902,7 +901,7 @@ class SessionKeyGenerator(object):
     def get_web_auth_session_key(self, url):
         """Retrieves the session key of a web authorization process by its url."""
         
-        if url in self.web_auth_tokens.keys():
+        if url in self.web_auth_tokens:
             token = self.web_auth_tokens[url]
         else:
             token = ""    #that's gonna raise a WSError of an unauthorized token when the request is executed.
@@ -3280,7 +3279,7 @@ class _Search(_BaseObject):
     def _get_params(self):
         params = {}
         
-        for key in self.search_terms.keys():
+        for key in self.search_terms:
             params[key] = self.search_terms[key]
         
         return params
@@ -3463,39 +3462,19 @@ def md5(text):
     return h.hexdigest()
 
 def _unicode(text):
-    if sys.version_info[0] == 3:
-        if type(text) in (bytes, bytearray):
-            return str(text, "utf-8")
-        elif type(text) == str:
-            return text
-        else:
-            return str(text)
+    if type(text) in (bytes, bytearray):
+        return str(text, "utf-8")
+    elif type(text) == str:
+        return text
+    else:
+        return str(text)
         
-    elif sys.version_info[0] ==2:
-        if type(text) in (str,):
-            return unicode(text, "utf-8")
-        elif type(text) == unicode:
-            return text
-        else:
-            return unicode(text)
-
 def _string(text):
     """For Python2 routines that can only process str type."""
-    
-    if sys.version_info[0] == 3:
-        if type(text) != str:
-            return str(text)
-        else:
-            return text
-    
-    elif sys.version_info[0] == 2:
-        if type(text) == str:
-            return text
-        
-        if type(text) == int:
-            return str(text)
-        
-        return text.encode("utf-8")
+    if type(text) != str:
+        return str(text)
+    else:
+        return text
 
 def _collect_nodes(limit, sender, method_name, cacheable, params=None):
     """
@@ -3582,9 +3561,9 @@ def _unescape_htmlentity(string):
     
     #string = _unicode(string)  
     
-    mapping = htmlentitydefs.name2codepoint
+    mapping = html.entities.name2codepoint
     for key in mapping:
-        string = string.replace("&%s;" %key, unichr(mapping[key]))
+        string = string.replace("&%s;" %key, chr(mapping[key]))
     
     return string
     
@@ -3640,7 +3619,7 @@ class _ScrobblerRequest(object):
         connection = HTTPConnection(self.hostname)
 
         data = []
-        for name in self.params.keys():
+        for name in self.params:
             value = url_quote_plus(self.params[name])
             data.append('='.join((name, value)))
         data = "&".join(data)
